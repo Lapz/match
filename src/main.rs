@@ -1,5 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap,HashSet};
 use std::hash::Hash;
+
+#[derive(Debug,Clone)]
+struct Context(HashMap<Constructor,Vec<TermDescription>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Value {
@@ -19,6 +22,13 @@ struct Constructor {
     span: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TermDescription {
+    Pos(Constructor,Vec<TermDescription>),
+
+    Neg(HashSet<Constructor>)
+}
+
 fn tt() -> Pattern {
     Pattern::Con(Constructor::new("true", 0, 2), vec![])
 }
@@ -33,6 +43,7 @@ enum Pattern {
     Con(Constructor, Vec<Pattern>), //e.g. List(10,Nil)
 }
 
+
 impl Constructor {
     pub fn new(name: &str, arity: i32, span: i32) -> Self {
         Self {
@@ -43,6 +54,33 @@ impl Constructor {
     }
 }
 
+
+impl TermDescription {
+    pub fn add_neg(&mut self,con:Constructor) {
+       match *self {
+           TermDescription::Neg(ref mut nonset) => {
+               if !nonset.contains(&con) && nonset.len()+1 < con.span as usize {
+                    nonset.insert(con);
+               }
+           },
+           _ => ()
+       }
+    }
+}
+
+impl Context {
+    pub fn augment(&mut self,con:Constructor,desc:TermDescription) {
+
+        match self.0.get_mut(&con) {
+            Some(ref mut descs) => {
+                descs.push(desc)
+            },
+            None => {
+                self.0.insert(con,vec![]);
+            }
+        }
+    }
+}
 /// Attempts to match the expression against each pattern from a rule in rules.
 /// It succeeds with the rhs if the rule matches; it fails otherwise
 fn fail(expr: Pattern, rules: &mut Vec<(Pattern, Pattern)>) -> Option<Pattern> {
@@ -66,6 +104,34 @@ fn succeed(
         let (pat1, obj1) = work.remove(0);
 
         compile_match(pat1, obj1, work, rhs, rules)
+    }
+}
+
+enum MatchResult {
+    Yes,
+    No,
+    Maybe
+}
+
+fn static_match(pcon:Constructor,dsc:TermDescription) -> MatchResult {
+    match dsc {
+        TermDescription::Pos(ref c,ref descs) => {
+            if &pcon == c {
+                MatchResult::Yes
+            }else {
+                MatchResult::No
+            }
+        },
+
+        TermDescription::Neg(ref cons) => {
+            if cons.contains(&pcon) {
+                MatchResult::No
+            }else if !cons.contains(&pcon) && pcon.span as usize == 1+cons.len() {
+                MatchResult::Yes
+            }else {
+                MatchResult::Maybe
+            }
+        }
     }
 }
 
