@@ -2,7 +2,7 @@ use std::collections::{HashMap,HashSet};
 use std::hash::Hash;
 
 #[derive(Debug,Clone)]
-struct Context(HashMap<Constructor,Vec<TermDescription>>);
+struct Context(Vec<(Constructor,Vec<TermDescription>)>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Value {
@@ -69,17 +69,49 @@ impl TermDescription {
 }
 
 impl Context {
-    pub fn augment(&mut self,con:Constructor,desc:TermDescription) {
-
-        match self.0.get_mut(&con) {
-            Some(ref mut descs) => {
-                descs.push(desc)
-            },
-            None => {
-                self.0.insert(con,vec![]);
-            }
-        }
+    pub fn new() -> Self {
+        Self(Vec::new())
     }
+    pub fn augment(&mut self,desc:TermDescription) {
+
+        if self.0.is_empty() {
+            return;
+        }
+
+        let (con,mut args) = self.0.remove(0);
+
+        args.push(desc);
+
+        self.0.insert(0,(con,args));
+    }
+
+    pub fn norm(&mut self) {
+        let (con,mut args) = self.0.remove(0);
+        args.reverse();
+        self.augment(TermDescription::Pos(con,args))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+
+fn build_dsc(ctx:&mut Context,dsc:TermDescription,work:&mut Vec<(Pattern,Pattern,Vec<TermDescription>)>) -> TermDescription {
+    if ctx.is_empty() && work.is_empty() {
+        dsc
+    }else {
+        let (con,mut args) = ctx.0.remove(0);
+        let (_,_,mut dargs) = work.remove(0);
+
+        dargs.insert(0,dsc);
+        args.extend(dargs);
+        args.reverse();
+
+
+        build_dsc(ctx,TermDescription::Pos(con,args),work)
+    }
+
 }
 /// Attempts to match the expression against each pattern from a rule in rules.
 /// It succeeds with the rhs if the rule matches; it fails otherwise
