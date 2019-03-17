@@ -14,6 +14,24 @@ enum Value {
     Var(String),
 }
 
+type MatchRule = Vec<(Pattern, i32)>;
+type Rhs = i32;
+
+/// Used to represent destructing of and object
+#[derive(Debug, Clone)]
+enum Access {
+    /// The object
+    Obj,
+    /// A field of an object
+    Sel(usize, Box<Access>),
+}
+#[derive(Debug, Clone)]
+enum Decision {
+    Failure,
+    Success(Rhs),
+    IfEq(Access, Constructor, Box<Decision>, Box<Decision>),
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 struct TypeName(pub String);
 
@@ -37,6 +55,18 @@ fn tt() -> Pattern {
 
 fn ff() -> Pattern {
     Pattern::Con(Constructor::new("false", 0, 2), vec![])
+}
+
+fn tup(args:Vec<Pattern>) -> Pattern {
+    Pattern::Con(Constructor::new("tuple",args.len() as i32,1),args)
+}
+
+fn nil() -> Pattern {
+    Pattern::Con(Constructor::new("nil",0,2),vec![])
+}
+
+fn var(name:&str) -> Pattern {
+    Pattern::Var(name.into())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -67,9 +97,9 @@ impl TermDescription {
         }
     }
 
-    fn get_dargs(&mut self) -> Vec<TermDescription> {
+    fn get_dargs(&mut self,i:usize) -> Vec<TermDescription> {
         match self {
-            TermDescription::Neg(_) => vec![],
+            TermDescription::Neg(_) => (0..i).map(|_| TermDescription::Neg(HashSet::new())).collect(),
             TermDescription::Pos(_, dargs) => dargs.clone(),
         }
     }
@@ -109,13 +139,16 @@ impl Context {
 fn build_dsc(
     ctx: &mut Context,
     dsc: TermDescription,
-    work: &mut Vec<(Vec<Pattern>, Vec<Pattern>, Vec<TermDescription>)>,
+    work: &mut Vec<(Vec<Pattern>, Vec<Access>, Vec<TermDescription>)>,
 ) -> TermDescription {
     if ctx.is_empty() && work.is_empty() {
         dsc
     } else {
         let (con, mut args) = ctx.0.remove(0);
-        let (_, _, mut dargs) = work.remove(0);
+
+        let (_,_,mut dargs) = work.remove(0);
+
+
 
         dargs.insert(0, dsc);
         args.extend(dargs);
@@ -126,32 +159,35 @@ fn build_dsc(
 }
 /// Attempts to match the expression against each pattern from a rule in rules.
 /// It succeeds with the rhs if the rule matches; it fails otherwise
-fn fail(
-    expr: Pattern,
-    dsc: TermDescription,
-    rules: &mut Vec<(Pattern, Pattern)>,
-) -> Option<Pattern> {
+fn fail(dsc: TermDescription, rules: &mut MatchRule) -> Decision {
     if rules.is_empty() {
-        return None;
+        Decision::Failure
     } else {
         let (pat1, rhs1) = rules.remove(0);
 
-        compile_match(pat1, expr, dsc, &mut Context::new(), vec![], rhs1, rules)
+        compile_match(
+            pat1,
+            Access::Obj,
+            dsc,
+            &mut Context::new(),
+            &mut vec![],
+            rhs1,
+            rules,
+        )
     }
 }
 
 fn succeed(
     ctx: &mut Context,
-    mut work: Vec<(Vec<Pattern>, Vec<Pattern>, Vec<TermDescription>)>,
-    rhs: Pattern,
-    rules: &mut Vec<(Pattern, Pattern)>,
-) -> Option<Pattern> {
+    work: &mut Vec<(Vec<Pattern>, Vec<Access>, Vec<TermDescription>)>,
+    rhs: Rhs,
+    rules: &mut MatchRule,
+) -> Decision {
     if work.is_empty() {
-        Some(rhs)
+        Decision::Success(rhs)
     } else {
         let mut work1 = work.remove(0);
-
-        if work1.0.is_empty() || work1.1.is_empty() || work1.2.is_empty() {
+        if work1.0.is_empty()  && work1.1.is_empty() && work1.2.is_empty()  {
             ctx.norm();
             succeed(ctx, work, rhs, rules)
         } else {
@@ -161,27 +197,27 @@ fn succeed(
         }
     }
 }
-
+#[derive(Debug,Clone)]
 enum MatchResult {
     Yes,
     No,
     Maybe,
 }
 
-fn static_match(pcon: &Constructor, dsc: &TermDescription) -> MatchResult {
+fn static_match(pcon: &Constructor, dsc: &mut TermDescription) -> MatchResult {
     match dsc {
-        TermDescription::Pos(ref c, ref descs) => {
-            if pcon == c {
+        TermDescription::Pos(ref con, ref descs) => {
+            if con == pcon {
                 MatchResult::Yes
             } else {
                 MatchResult::No
             }
         }
 
-        TermDescription::Neg(ref cons) => {
+        TermDescription::Neg(ref mut cons) => {
             if cons.contains(pcon) {
                 MatchResult::No
-            } else if !cons.contains(pcon) && pcon.span as usize == 1 + cons.len() {
+            } else if pcon.span as usize == (1 + cons.len()) {
                 MatchResult::Yes
             } else {
                 MatchResult::Maybe
@@ -192,46 +228,56 @@ fn static_match(pcon: &Constructor, dsc: &TermDescription) -> MatchResult {
 
 fn compile_match(
     pat1: Pattern,
-    expr: Pattern,
+    obj: Access,
     mut dsc: TermDescription,
     ctx: &mut Context,
-    mut work: Vec<(Vec<Pattern>, Vec<Pattern>, Vec<TermDescription>)>,
-    rhs: Pattern,
-    rules: &mut Vec<(Pattern, Pattern)>,
-) -> Option<Pattern> {
+    mut work: &mut Vec<(Vec<Pattern>, Vec<Access>, Vec<TermDescription>)>,
+    rhs: Rhs,
+    rules: &mut MatchRule,
+) -> Decision {
+
+
     match pat1 {
         Pattern::Var(_) => {
             ctx.augment(dsc);
             succeed(ctx, work, rhs, rules)
         }
-        Pattern::Con(ref pcon, ref pargs) => match expr {
-            Pattern::Con(ref ocon, ref oargs) => match static_match(pcon, &dsc) {
+        Pattern::Con(ref pcon, ref pargs) => {
+            match static_match(pcon, &mut dsc) {
                 MatchResult::Yes => {
                     ctx.push((pcon.clone(), vec![]));
-
-                    work.push((pargs.clone(), oargs.clone(), dsc.get_dargs()));
-
+                    work.push((
+                        pargs.clone(),
+                              (0..pcon.arity).map(|i| Access::Sel((i+1) as usize,Box::new(obj.clone()))).collect(),
+//                       /**/ vec![Access::Sel(, Box::new(obj.clone()))],
+                        dsc.get_dargs(pcon.arity as usize),
+                    ));
                     succeed(ctx, work, rhs, rules)
                 }
-                MatchResult::No => fail(expr, build_dsc(ctx, dsc, &mut work), rules),
+                MatchResult::No => fail(build_dsc(ctx, dsc, &mut work), rules),
                 MatchResult::Maybe => {
-                    if ocon == pcon {
-                        ctx.push((pcon.clone(), vec![]));
+                    ctx.push((pcon.clone(), vec![]));
 
-                        work.push((pargs.clone(), oargs.clone(), dsc.get_dargs()));
+                    work.push((
+                        pargs.clone(),
+                        (0..pcon.arity).map(|i| Access::Sel((i+1) as usize,Box::new(obj.clone()))).collect(),
+                        dsc.get_dargs(pcon.arity as usize),
+                    ));
 
-                        succeed(ctx, work, rhs, rules)
-                    } else {
-                        dsc.add_neg(pcon.clone());
-                        fail(expr, dsc, rules)
-                    }
+
+                    let lhs = Box::new(succeed(ctx, work, rhs, rules));
+
+                    dsc.add_neg(pcon.clone());
+
+                    Decision::IfEq(
+                        obj,
+                        pcon.clone(),
+                        lhs,
+                        Box::new(fail(build_dsc(ctx, dsc, &mut work), rules)),
+                    )
                 }
-            },
-            Pattern::Var(_) => {
-                ctx.augment(dsc);
-                succeed(ctx, work, rhs, rules)
             }
-        },
+        }
     }
 }
 
@@ -246,48 +292,33 @@ fn main() {
         }
     */
 
-    let origobj = Pattern::Con(
-        Constructor::new("Bob", 2, 3),
-        vec![Pattern::Var("x".into()), Pattern::Var("y".into())],
-    );
+
 
     let mut allmrules = vec![
         (
-            Pattern::Con(
-                Constructor::new("Bob", 2, 3),
-                vec![Pattern::Var("a".into()), Pattern::Var("b".into())],
-            ),
-            tt(),
+            tup(vec![tt(),Pattern::Con(Constructor::new("green",0,3),vec![])]),
+            111
         ),
         (
-            Pattern::Con(
-                Constructor::new("Busey", 1, 3),
-                vec![Pattern::Con(
-                    Constructor::new("Busey", 1, 3),
-                    vec![Pattern::Var("z".into())],
-                )],
-            ),
-            ff(),
-        ),
-        (
-            Pattern::Con(
-                Constructor::new("Busey", 1, 3),
-                vec![Pattern::Con(
-                    Constructor::new("Bob", 2, 3),
-                    vec![Pattern::Var("x".into()), Pattern::Var("y".into())],
-                )],
-            ),
-            tt(),
-        ),
+            tup(vec![ff(),Pattern::Con(Constructor::new("green",0,3),vec![])]),
+            222
+        )
     ];
+
+//    let mut allmrules = vec![
+//        (
+//            tup(vec![var("x"),nil()]),
+//            111
+//        ),
+//        (
+//            tup(vec![nil(),var("x")]),
+//            222
+//        )
+//    ];
 
     println!(
         "{:#?}",
-        fail(
-            origobj,
-            TermDescription::Neg(HashSet::new()),
-            &mut allmrules
-        )
+        fail(TermDescription::Neg(HashSet::new()), &mut allmrules)
     )
 
     //example
@@ -352,12 +383,7 @@ mod test {
             ),
         ];
 
-        assert!(fail(
-            origobj,
-            TermDescription::Neg(HashSet::new()),
-            &mut allmrules
-        )
-        .is_some())
+        assert!(fail(TermDescription::Neg(HashSet::new()), &mut allmrules).is_some())
     }
 
     /// Fails because of missing rule
@@ -392,11 +418,7 @@ mod test {
         ];
 
         assert_eq!(
-            fail(
-                origobj,
-                TermDescription::Neg(HashSet::new()),
-                &mut allmrules
-            ),
+            fail(TermDescription::Neg(HashSet::new()), &mut allmrules),
             None
         )
     }
