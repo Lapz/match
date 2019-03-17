@@ -3,6 +3,7 @@ use std::collections::{HashSet};
 #[derive(Debug, Clone)]
 struct Context(Vec<(Constructor, Vec<TermDescription>)>);
 
+
 type MatchRule = Vec<(Pattern, i32)>;
 type Rhs = i32;
 
@@ -14,6 +15,8 @@ enum Access {
     /// A field of an object
     Sel(usize, Box<Access>),
 }
+
+
 #[derive(Debug, Clone)]
 enum Decision {
     Failure,
@@ -183,6 +186,8 @@ fn succeed(
         }
     }
 }
+
+
 #[derive(Debug, Clone)]
 enum MatchResult {
     Yes,
@@ -235,7 +240,6 @@ fn compile_match(
                         (0..pcon.arity)
                             .map(|i| Access::Sel((i + 1) as usize, Box::new(obj.clone())))
                             .collect(),
-                        //                       /**/ vec![Access::Sel(, Box::new(obj.clone()))],
                         dsc.get_dargs(pcon.arity as usize),
                     ));
                     succeed(ctx, work, rhs, rules)
@@ -293,6 +297,37 @@ fn main() {
                 Pattern::Con(Constructor::new("green", 0, 3), vec![]),
             ]),
             222,
+        ),
+    ];
+
+
+    let mut allmrules = vec![
+        (
+            Pattern::Con(
+                Constructor::new("Bob", 2, 3),
+                vec![Pattern::Var("a".into()), Pattern::Var("b".into())],
+            ),
+            111,
+        ),
+        (
+            Pattern::Con(
+                Constructor::new("Busey", 1, 3),
+                vec![Pattern::Con(
+                    Constructor::new("Busey", 1, 3),
+                    vec![Pattern::Var("z".into())],
+                )],
+            ),
+            222,
+        ),
+        (
+            Pattern::Con(
+                Constructor::new("Busey", 1, 3),
+                vec![Pattern::Con(
+                    Constructor::new("Bob", 2, 3),
+                    vec![Pattern::Var("x".into()), Pattern::Var("y".into())],
+                )],
+            ),
+            333,
         ),
     ];
 
